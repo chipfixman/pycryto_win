@@ -12,7 +12,6 @@ from config import API_KEY, SECRET_KEY, PASSPHRASE, USE_DEMO
 from okx_client import (
     get_instruments,
     get_tickers,
-    get_candles,
     place_order,
     cancel_order,
     get_orders,
@@ -20,7 +19,8 @@ from okx_client import (
 )
 from okx_ws import OKXWebSocket
 from candles_chart import CandlesChartPanel
-
+from tickers_sidebar import TickersPanel
+from markets_sidebar import MarketsPanel
 
 # Custom events for thread-safe UI updates
 EVT_WS_TICKER = wx.NewEventType()
@@ -59,242 +59,7 @@ class WsErrorEvent(wx.PyEvent):
         self.msg = msg
 
 
-class AutoWidthListCtrl(wx.ListCtrl, ListCtrlAutoWidthMixin):
-    def __init__(self, parent, *args, **kwargs):
-        wx.ListCtrl.__init__(self, parent, *args, **kwargs)
-        ListCtrlAutoWidthMixin.__init__(self)
 
-
-class MarketsPanel(wx.Panel):
-    def __init__(self, parent, on_select: callable):
-        super().__init__(parent)
-        self.on_select = on_select
-        layout = wx.BoxSizer(wx.VERTICAL)
-        self.search = wx.SearchCtrl(self, style=wx.TE_PROCESS_ENTER)
-        self.search.SetDescriptiveText("Filter pair...")
-        layout.Add(self.search, 0, wx.EXPAND | wx.ALL, 2)
-        self.list = AutoWidthListCtrl(self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
-        self.list.AppendColumn("Pair", width=120)
-        self.list.AppendColumn("Base", width=50)
-        self.list.AppendColumn("Quote", width=50)
-        layout.Add(self.list, 1, wx.EXPAND)
-        self.SetSizer(layout)
-        self.list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_sel)
-        self.search.Bind(wx.EVT_TEXT, self._on_filter)
-        self._instruments = []
-        self._filtered = []
-
-    def load(self):
-        def work():
-            try:
-                data = get_instruments("SPOT")
-                wx.CallAfter(self._set_instruments, data)
-            except Exception as e:
-                wx.CallAfter(self._show_error, str(e))
-
-        threading.Thread(target=work, daemon=True).start()
-
-    def _set_instruments(self, data: list):
-        self._instruments = [d for d in data if d.get("state") == "live" and d.get("quoteCcy") == "USDT"]
-        self._filtered = self._instruments.copy()
-        self._refresh_list()
-
-    def _refresh_list(self):
-        self.list.DeleteAllItems()
-        for d in self._filtered[:500]:
-            self.list.Append((d.get("instId", ""), d.get("baseCcy", ""), d.get("quoteCcy", "")))
-
-    def _on_filter(self, evt):
-        q = self.search.GetValue().strip().upper()
-        if not q:
-            self._filtered = self._instruments.copy()
-        else:
-            self._filtered = [d for d in self._instruments if q in (d.get("instId") or "").upper()]
-        self._refresh_list()
-
-    def _on_sel(self, evt):
-        idx = evt.GetIndex()
-        if 0 <= idx < len(self._filtered):
-            inst_id = self._filtered[idx].get("instId", "")
-            if inst_id and self.on_select:
-                self.on_select(inst_id)
-
-    def _show_error(self, msg: str):
-        wx.MessageBox(msg, "Error", wx.OK | wx.ICON_ERROR)
-
-
-class TickersPanel(wx.Panel):
-    def __init__(self, parent):
-        super().__init__(parent)
-        layout = wx.BoxSizer(wx.VERTICAL)
-        self.grid = wx.grid.Grid(self)
-        self.grid.CreateGrid(0, 7)
-        self.grid.SetColLabelValue(0, "Pair")
-        self.grid.SetColLabelValue(1, "Last")
-        self.grid.SetColLabelValue(2, "Change %")
-        self.grid.SetColLabelValue(3, "High 24h")
-        self.grid.SetColLabelValue(4, "Low 24h")
-        self.grid.SetColLabelValue(5, "Volume 24h")
-        self.grid.SetColLabelValue(6, "Time")
-        self.grid.EnableEditing(False)
-        layout.Add(self.grid, 1, wx.EXPAND)
-        self.SetSizer(layout)
-        self._ticker_map = {}
-        self._row_for_inst = {}
-
-    def load(self):
-        def work():
-            try:
-                data = get_tickers("SPOT")
-                wx.CallAfter(self._set_tickers, data)
-            except Exception as e:
-                wx.CallAfter(self._show_error, str(e))
-
-        threading.Thread(target=work, daemon=True).start()
-
-    def _set_tickers(self, data: list):
-        usdt = [d for d in data if (d.get("instId") or "").endswith("-USDT")]
-        self._ticker_map = {d["instId"]: d for d in usdt}
-        self._sync_grid()
-
-    def _sync_grid(self):
-        rows = sorted(self._ticker_map.keys())
-        n = self.grid.GetNumberRows()
-        if n > 0:
-            self.grid.DeleteRows(0, n)
-        for i, inst_id in enumerate(rows[:200]):
-            self.grid.AppendRows(1)
-            self._update_row(i, inst_id, self._ticker_map[inst_id])
-        self._row_for_inst = {inst_id: i for i, inst_id in enumerate(rows[:200])}
-
-    def update_ticker(self, inst_id: str, data: dict):
-        self._ticker_map[inst_id] = data
-        if inst_id in self._row_for_inst:
-            row = self._row_for_inst[inst_id]
-            self._update_row(row, inst_id, data)
-        else:
-            self._sync_grid()
-
-    def _update_row(self, row: int, inst_id: str, d: dict):
-        last = d.get("last", "") or d.get("lastPx", "")
-        open_px = d.get("open24h", "") or d.get("sodUtc0", "")
-        self.grid.SetCellValue(row, 0, inst_id)
-        self.grid.SetCellValue(row, 1, str(last))
-        try:
-            lf, of = float(last), float(open_px)
-            ch = ((lf - of) / of * 100) if of else 0
-            self.grid.SetCellValue(row, 2, f"{ch:.2f}%")
-            self.grid.SetCellBackgroundColour(row, 2, wx.Colour(0, 200, 0) if ch >= 0 else wx.Colour(200, 0, 0))
-        except (TypeError, ValueError):
-            self.grid.SetCellValue(row, 2, "")
-        self.grid.SetCellValue(row, 3, str(d.get("high24h", "") or d.get("highPx", "")))
-        self.grid.SetCellValue(row, 4, str(d.get("low24h", "") or d.get("lowPx", "")))
-        self.grid.SetCellValue(row, 5, str(d.get("vol24h", "") or d.get("volCcy24h", "")))
-        self.grid.SetCellValue(row, 6, str(d.get("ts", ""))[:19] if d.get("ts") else "")
-
-    def _show_error(self, msg: str):
-        wx.MessageBox(msg, "Error", wx.OK | wx.ICON_ERROR)
-
-
-class CandlesPanel(wx.Panel):
-    BAR_OPTIONS = ["1m", "3m", "5m", "15m", "30m", "1H", "2H", "4H", "1D"]
-
-    def __init__(self, parent, on_candles_set=None):
-        super().__init__(parent)
-        self._on_candles_set = on_candles_set
-        layout = wx.BoxSizer(wx.VERTICAL)
-        bar_row = wx.BoxSizer(wx.HORIZONTAL)
-        bar_row.Add(wx.StaticText(self, label="Pair:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
-        self.pair_label = wx.StaticText(self, label="—")
-        bar_row.Add(self.pair_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
-        bar_row.Add(wx.StaticText(self, label="Bar:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
-        self.bar_choice = wx.Choice(self, choices=self.BAR_OPTIONS)
-        self.bar_choice.SetSelection(0)
-        bar_row.Add(self.bar_choice, 0, wx.RIGHT, 8)
-        self.refresh_btn = wx.Button(self, label="Refresh")
-        bar_row.Add(self.refresh_btn, 0)
-        layout.Add(bar_row, 0, wx.ALL, 4)
-        self.grid = wx.grid.Grid(self)
-        self.grid.CreateGrid(0, 6)
-        self.grid.SetColLabelValue(0, "Time")
-        self.grid.SetColLabelValue(1, "Open")
-        self.grid.SetColLabelValue(2, "High")
-        self.grid.SetColLabelValue(3, "Low")
-        self.grid.SetColLabelValue(4, "Close")
-        self.grid.SetColLabelValue(5, "Volume")
-        self.grid.EnableEditing(False)
-        layout.Add(self.grid, 1, wx.EXPAND)
-        self.SetSizer(layout)
-        self._inst_id = None
-        self._candles = []
-        self.bar_choice.Bind(wx.EVT_CHOICE, lambda e: self._load())
-        self.refresh_btn.Bind(wx.EVT_BUTTON, lambda e: self._load())
-
-    def set_pair(self, inst_id: str):
-        self._inst_id = inst_id
-        self.pair_label.SetLabel(inst_id or "—")
-        self._load()
-
-    def _load(self):
-        if not self._inst_id:
-            return
-        bar = self.BAR_OPTIONS[self.bar_choice.GetSelection()]
-        inst_id = self._inst_id
-
-        def work():
-            try:
-                data = get_candles(inst_id, bar=bar, limit="100")
-                wx.CallAfter(self._set_candles, data)
-            except Exception as e:
-                wx.CallAfter(self._show_error, str(e))
-
-        threading.Thread(target=work, daemon=True).start()
-
-    def _set_candles(self, data: list):
-        # OKX returns [ts, o, h, l, c, vol, volCcy, volCcyQuote, confirm]
-        self._candles = data
-        if self._on_candles_set:
-            self._on_candles_set(data)
-        n = self.grid.GetNumberRows()
-        if n > 0:
-            self.grid.DeleteRows(0, n)
-        for row, c in enumerate(reversed(data)):
-            self.grid.AppendRows(1)
-            ts = c[0] if isinstance(c[0], str) else str(c[0])
-            try:
-                dt = datetime.fromtimestamp(int(ts) / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
-            except Exception:
-                dt = ts
-            self.grid.SetCellValue(row, 0, dt)
-            self.grid.SetCellValue(row, 1, str(c[1]))
-            self.grid.SetCellValue(row, 2, str(c[2]))
-            self.grid.SetCellValue(row, 3, str(c[3]))
-            self.grid.SetCellValue(row, 4, str(c[4]))
-            self.grid.SetCellValue(row, 5, str(c[5]) if len(c) > 5 else "")
-
-    def append_candle(self, inst_id: str, arr: list):
-        if inst_id != self._inst_id or not arr:
-            return
-        # [ts, o, h, l, c, vol, volCcy, volCcyQuote, confirm]
-        self._candles.append(arr)
-        self.grid.AppendRows(1)
-        row = self.grid.GetNumberRows() - 1
-        ts = arr[0] if isinstance(arr[0], str) else str(arr[0])
-        try:
-            dt = datetime.fromtimestamp(int(ts) / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
-        except Exception:
-            dt = ts
-        self.grid.SetCellValue(row, 0, dt)
-        self.grid.SetCellValue(row, 1, str(arr[1]))
-        self.grid.SetCellValue(row, 2, str(arr[2]))
-        self.grid.SetCellValue(row, 3, str(arr[3]))
-        self.grid.SetCellValue(row, 4, str(arr[4]))
-        self.grid.SetCellValue(row, 5, str(arr[5]) if len(arr) > 5 else "")
-        if self._on_candles_set:
-            self._on_candles_set(self._candles)
-
-    def _show_error(self, msg: str):
-        wx.MessageBox(msg, "Error", wx.OK | wx.ICON_ERROR)
 
 
 class TradingPanel(wx.Panel):
@@ -455,7 +220,9 @@ class MainFrame(wx.Frame):
         # Load data
         self.markets_panel.load()
         self.tickers_panel.load()
-        self.candles_panel.set_pair(self._current_inst_id)
+        #self.candles_panel.set_pair(self._current_inst_id)
+        self.candles_chart_panel.set_pair(self._current_inst_id)
+        
         self.trading_panel._refresh_orders()
         self._start_ws()
 
@@ -479,11 +246,13 @@ class MainFrame(wx.Frame):
         center.Add(wx.StaticText(panel, label="Candles"), 0, wx.ALL, 2)
 
 
-
+        # candles
         self.candles_chart_panel = CandlesChartPanel(panel)
         center.Add(self.candles_chart_panel, 1, wx.EXPAND)       
-        self.candles_panel = CandlesPanel(panel, on_candles_set=lambda data: self.candles_chart_panel.set_data(data or []))
-        center.Add(self.candles_panel, 1, wx.EXPAND)
+        # self.candles_panel = CandlesPanel(panel, on_candles_set=lambda data: self.candles_chart_panel.set_data(data or []))
+        # center.Add(self.candles_panel, 1, wx.EXPAND)
+
+
         main.Add(center, 1, wx.EXPAND)
         main.Add(wx.StaticLine(panel, style=wx.LI_VERTICAL), 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 4)
         # Right: trading
@@ -504,11 +273,12 @@ class MainFrame(wx.Frame):
 
     def _on_market_select(self, inst_id: str):
         self._current_inst_id = inst_id
-        self.candles_panel.set_pair(inst_id)
+        self.candles_chart_panel.set_pair(inst_id)
         self.trading_panel.set_inst_id(inst_id)
         if self._ws_public:
             self._ws_public.subscribe_ticker(inst_id)
-            bar = CandlesPanel.BAR_OPTIONS[self.candles_panel.bar_choice.GetSelection()]
+            # bar = CandlesPanel.BAR_OPTIONS[self.candles_panel.bar_choice.GetSelection()]
+            bar = "1m"
             self._ws_public.subscribe_candle(inst_id, bar)
         self.status.SetStatusText(f"Selected {inst_id}")
 

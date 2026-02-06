@@ -3,7 +3,12 @@ CandlesChartPanel: draw OHLCV candlestick chart with volume.
 Data format: list of [ts, open, high, low, close, vol, ...] (OKX style).
 """
 import wx
+import threading
 from datetime import datetime, timezone
+
+from okx_client import (
+    get_candles,
+)
 
 
 def _f(s, default=0.0):
@@ -29,6 +34,27 @@ class CandlesChartPanel(wx.Panel):
         self.SetMinSize((300, 180))
         self.Bind(wx.EVT_PAINT, self._on_paint)
         self.Bind(wx.EVT_SIZE, self._on_size)
+
+    def set_pair(self, inst_id: str):
+        self._inst_id = inst_id
+        # self.pair_label.SetLabel(inst_id or "—")
+        self._load()
+
+    def _load(self):
+        if not self._inst_id:
+            return
+        # bar = self.BAR_OPTIONS[self.bar_choice.GetSelection()]
+        bar = "1m"
+        inst_id = self._inst_id
+
+        def work():
+            try:
+                data = get_candles(inst_id, bar=bar, limit="100")
+                wx.CallAfter(self.set_data, data)
+            except Exception as e:
+                wx.CallAfter(self.set_data, str(e))
+
+        threading.Thread(target=work, daemon=True).start()
 
     def set_data(self, data: list):
         """Set OHLCV data. Each row: [ts, open, high, low, close, vol, ...] (OKX order)."""
