@@ -91,9 +91,9 @@ class MarketsPanel(wx.Panel):
     def _on_filter(self, evt):
         q = self.search.GetValue().strip().upper()
         if not q:
-            self._filtered = self._instruments.copy()
+            self._filtered = self._tickers.copy()
         else:
-            self._filtered = [d for d in self._instruments if q in (d.get("instId") or "").upper()]
+            self._filtered = [d for d in self._tickers if q in (d.get("instId") or "").upper()]
         self._refresh_list()
 
     def _on_sel(self, evt):
