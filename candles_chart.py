@@ -49,7 +49,7 @@ class CandlesChartPanel(wx.Panel):
 
         def work():
             try:
-                data = get_candles(inst_id, bar=bar, limit="100")
+                data = get_candles(inst_id, bar=bar, limit="300")
                 wx.CallAfter(self.set_data, data)
             except Exception as e:
                 wx.CallAfter(self.set_data, str(e))

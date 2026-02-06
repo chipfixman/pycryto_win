@@ -32,8 +32,13 @@ class MarketsPanel(wx.Panel):
         layout.Add(self.search, 0, wx.EXPAND | wx.ALL, 2)
         self.list = AutoWidthListCtrl(self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
         self.list.AppendColumn("Pair", width=120)
-        self.list.AppendColumn("Price", width=50)
-        self.list.AppendColumn("Change", width=50)
+        self.list.AppendColumn("Price", width=150)
+        self.list.AppendColumn("Change %", width=80)
+        self.list.AppendColumn("Open 24h", width=120)
+        self.list.AppendColumn("High 24h", width=120)
+        self.list.AppendColumn("Low 24h", width=120)
+        self.list.AppendColumn("Volume 24h", width=120)
+        self.list.AppendColumn("Time", width=120)
         layout.Add(self.list, 1, wx.EXPAND)
         self.SetSizer(layout)
         self.list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_sel)
@@ -57,6 +62,8 @@ class MarketsPanel(wx.Panel):
         # self._filtered = self._instruments.copy()
         self._tickers = [d for d in data if (d.get("instId") or "").endswith("-USDT")]
         self._filtered = self._tickers.copy()
+        # sort by last
+        self._filtered.sort(key=lambda x: x.get("instId", ""), reverse=False)
         self._refresh_list()
 
     def _refresh_list(self):
@@ -64,13 +71,20 @@ class MarketsPanel(wx.Panel):
         for d in self._filtered: #[:150]:
             last = last = d.get("last", "") or d.get("lastPx", "")
             open_px = d.get("open24h", "") or d.get("sodUtc0", "")
+            high = str(d.get("high24h", "") or d.get("highPx", ""))
+            low = str(d.get("low24h", "") or d.get("lowPx", ""))
+            vol = str(d.get("vol24h", "") or d.get("volCcy24h", ""))
+            s1 = str(d.get("ts", "")) #[:19] if d.get("ts") else ""
+
             try:
                 lf, of = float(last), float(open_px)
                 ch = ((lf - of) / of * 100) if of else 0
-                self.list.Append((d.get("instId", ""), last, ch))
+                self.list.Append( (d.get("instId", ""), last, f"{ch:.2f}%", open_px, high, low, vol, s1)) # , open_px, high, low, vol, ts) )
             except (TypeError, ValueError):
                 # self.grid.SetCellValue(row, 2, "")
-                self.list.Append((d.get("instId", ""), last, ""))
+                # wx.MessageBox(msg, "Error", wx.OK | wx.ICON_ERROR)
+                self.list.Append( (d.get("instId", ""), last, "", open_px, high, low, vol, s1)) #, open_px, high, low, vol, ts) )
+                
 
             
 
