@@ -283,6 +283,8 @@ def _run_curses(stdscr):
     # WS thread
     t = threading.Thread(target=_ws_thread, daemon=True)
     t.start()
+    # Refresh every 1 second; getch times out after 1000 ms
+    stdscr.timeout(1000)
     # Refresh loop
     while True:
         try:
@@ -297,6 +299,8 @@ def _run_curses(stdscr):
                 win_candle = curses.newwin(th, w2, 0, tw + 1)
                 win_book = curses.newwin(h2, tw, y2, 0)
                 win_trades = curses.newwin(h2, w2, y2, tw + 1)
+            stdscr.clear()
+            stdscr.refresh()
             _draw_ticker(win_ticker, th, tw)
             _draw_candle(win_candle, th, w2)
             _draw_orderbook(win_book, h2, tw)
@@ -307,8 +311,9 @@ def _run_curses(stdscr):
             if err:
                 stdscr.addstr(h - 1, 0, f" WS: {err[:w-6]} ".ljust(w)[:w], curses.A_REVERSE)
                 _state["error"] = ""
+                curses.doupdate()
             c = stdscr.getch()
-            if c == ord("q") or c == 27:
+            if c != -1 and (c == ord("q") or c == 27):
                 break
         except curses.error:
             pass
