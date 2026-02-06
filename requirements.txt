@@ -1,0 +1,4 @@
+# Python 3.12 - OKX Crypto Desktop App
+wxPython>=4.2.0
+requests>=2.31.0
+websocket-client>=1.6.0
